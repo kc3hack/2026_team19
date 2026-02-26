@@ -19,6 +19,8 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let isCapturing = false;
+let captureInputSource = "microphone";
+let captureSourceId = null;
 
 const PRIVACY_SETTINGS_URLS = {
   microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
@@ -95,6 +97,8 @@ function emitCaptureState() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("desktop:captureStateChanged", {
     isCapturing,
+    inputSource: captureInputSource,
+    sourceId: captureSourceId,
     updatedAt: Date.now(),
   });
 }
@@ -190,18 +194,32 @@ function registerIpcHandlers() {
     }));
   });
 
-  ipcMain.handle("desktop:startCapture", async () => {
+  ipcMain.handle("desktop:startCapture", async (_event, payload = {}) => {
+    captureInputSource =
+      payload && payload.inputSource === "system_audio"
+        ? "system_audio"
+        : "microphone";
+    captureSourceId =
+      payload && typeof payload.sourceId === "string" && payload.sourceId.trim()
+        ? payload.sourceId
+        : null;
     isCapturing = true;
     emitCaptureState();
     refreshTrayMenu();
-    return { ok: true, isCapturing };
+    return {
+      ok: true,
+      isCapturing,
+      inputSource: captureInputSource,
+      sourceId: captureSourceId,
+    };
   });
 
   ipcMain.handle("desktop:stopCapture", async () => {
     isCapturing = false;
+    captureSourceId = null;
     emitCaptureState();
     refreshTrayMenu();
-    return { ok: true, isCapturing };
+    return { ok: true, isCapturing, inputSource: captureInputSource, sourceId: null };
   });
 
   ipcMain.handle("desktop:getPermissions", async () => {

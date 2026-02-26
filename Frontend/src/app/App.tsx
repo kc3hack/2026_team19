@@ -43,7 +43,22 @@ const PRESETS = [
 
 const App: React.FC = () => {
   if (import.meta.env.DEV) console.log('[TalkScope] App.tsx 読み込み（主題入力あり）');
-  const { transcript, setTranscript, isListening, startListening, stopListening, error } = useSpeechRecognition();
+  const {
+    transcript,
+    setTranscript,
+    isListening,
+    startListening,
+    stopListening,
+    error,
+    isDesktopCaptureAvailable,
+    inputSource,
+    setInputSource,
+    desktopAudioSources,
+    selectedDesktopSourceId,
+    setSelectedDesktopSourceId,
+    refreshDesktopAudioSources,
+    desktopChunkCount,
+  } = useSpeechRecognition();
 
   const [activeTerms, setActiveTerms] = useState<Term[]>([]);
   const [selectedTerm, setSelectedTerm] = useState<Term | null>(null);
@@ -388,13 +403,36 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const toggleListening = () => {
-    if (isListening) { stopListening(); toast.info('録音を停止しました'); }
-    else { startListening(); toast.success('🎙 録音を開始しました'); }
-  };
-  const loadDemo = () => { setTranscript(DEMO_TEXT_INSTANT); toast.success('デモテキストを読み込みました'); };
-  const clearAll = () => {
-    if (isListening) stopListening();
+  const toggleListening = useCallback(() => {
+    if (isListening) {
+      void stopListening();
+      toast.info('録音を停止しました');
+      return;
+    }
+
+    void startListening().then((result) => {
+      if (!result.ok) {
+        toast.error(result.message || '録音開始に失敗しました');
+        return;
+      }
+
+      if (result.mode === 'desktop') {
+        toast.info(result.message || '🎧 システム音声チャンクの取得を開始しました');
+      } else if (result.mode === 'hybrid') {
+        toast.success('🎙 録音と文字起こしを開始しました（Desktopチャンク取得も有効）');
+      } else {
+        toast.success('🎙 録音を開始しました');
+      }
+    });
+  }, [isListening, startListening, stopListening]);
+  const loadDemo = useCallback(() => {
+    setTranscript(DEMO_TEXT_INSTANT);
+    toast.success('デモテキストを読み込みました');
+  }, [setTranscript]);
+  const clearAll = useCallback(() => {
+    if (isListening) {
+      void stopListening();
+    }
     demoStream.stopStream();
     setTranscript(''); setActiveTerms([]); setTermWeights({});
     setSelectedTerm(null);
@@ -408,7 +446,7 @@ const App: React.FC = () => {
     fetchingWordSetRef.current.clear();
     failedWordSetRef.current.clear();
     toast.info('リセットしました');
-  };
+  }, [demoStream, isListening, setTranscript, stopListening]);
 
   const termSimilarities = useMemo(() => {
     const out: Record<string, number> = {};
@@ -508,8 +546,28 @@ const App: React.FC = () => {
         darkMode={dk}
       />
     ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [transcript, isListening, filteredTerms, termWeights, termFrequencies, selectedTerm, searchHistory, dk, categoryFilter, handleTermClick, isPinned, handleTogglePin, themeVector, themeText, termVectors, apiTerms]);
+  }), [
+    transcript,
+    isListening,
+    filteredTerms,
+    termWeights,
+    termFrequencies,
+    selectedTerm,
+    searchHistory,
+    dk,
+    categoryFilter,
+    handleTermClick,
+    isPinned,
+    handleTogglePin,
+    themeVector,
+    themeText,
+    termVectors,
+    apiTerms,
+    toggleListening,
+    clearAll,
+    loadDemo,
+    demoStream,
+  ]);
 
   return (
     <div
@@ -537,8 +595,53 @@ const App: React.FC = () => {
             <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-[0.2em] hidden sm:inline">Pro</span>
           </div>
 
-          {/* Actions（右詰め）: 主題 → レイアウト → API確認 → 設定 */}
+          {/* Actions（右詰め）: 入力源 → 主題 → レイアウト → API確認 → 設定 */}
           <div className="flex items-center gap-2 shrink-0 ml-auto">
+            {isDesktopCaptureAvailable && (
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={inputSource}
+                  onChange={(e) => setInputSource(e.target.value as 'microphone' | 'system_audio')}
+                  className={`h-8 rounded-lg border px-2 text-[11px] font-bold ${dk ? 'bg-slate-900/60 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-600'}`}
+                  title="Desktop入力ソース"
+                >
+                  <option value="microphone">マイク入力</option>
+                  <option value="system_audio">システム音声</option>
+                </select>
+
+                {inputSource === 'system_audio' && (
+                  <>
+                    <select
+                      value={selectedDesktopSourceId ?? ''}
+                      onChange={(e) => setSelectedDesktopSourceId(e.target.value || null)}
+                      className={`h-8 max-w-[180px] rounded-lg border px-2 text-[11px] ${dk ? 'bg-slate-900/60 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-600'}`}
+                      title="システム音声の取得対象"
+                    >
+                      <option value="">
+                        {desktopAudioSources.length === 0 ? '取得対象なし' : '取得対象を選択'}
+                      </option>
+                      {desktopAudioSources.map((source) => (
+                        <option key={source.id} value={source.id}>
+                          {source.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => { void refreshDesktopAudioSources(); }}
+                      className={`h-8 rounded-lg border px-2 text-[11px] font-bold ${dk ? 'bg-slate-900/60 border-slate-700 text-slate-300 hover:text-slate-100' : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'}`}
+                      title="取得対象を更新"
+                    >
+                      更新
+                    </button>
+                  </>
+                )}
+
+                <span className={`text-[10px] font-mono ${dk ? 'text-slate-500' : 'text-slate-400'}`}>
+                  chunks:{desktopChunkCount}
+                </span>
+              </div>
+            )}
+
             {/* 主題入力（非ホバー: アイコンのみ / ホバー: 横に伸びてテキスト表示） */}
             <label
               id="lexiflow-theme-input"
