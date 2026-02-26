@@ -43,6 +43,7 @@ interface UseSpeechRecognitionReturn {
 }
 
 const PIPELINE_ERROR_NOTIFY_INTERVAL_MS = 5000;
+const PIPELINE_REQUEST_TIMEOUT_MS = 12000;
 
 const createPipelineSessionId = (): string =>
   `desktop_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -106,6 +107,27 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     pipelineNextSeqRef.current = 0;
     pipelineCommittedTextRef.current = '';
     pipelinePartialTextRef.current = '';
+  }, []);
+
+  const validateCapturePermission = useCallback(async (
+    source: CaptureInputSource,
+  ): Promise<string | null> => {
+    const desktopAPI = window.desktopAPI;
+    if (!desktopAPI?.getPermissions) return null;
+
+    try {
+      const permissions = await desktopAPI.getPermissions();
+      if (source === 'system_audio' && permissions.screen === 'denied') {
+        return '画面収録権限が拒否されています。システム設定で許可してください。';
+      }
+      if (source === 'microphone' && permissions.microphone === 'denied') {
+        return 'マイク権限が拒否されています。システム設定で許可してください。';
+      }
+      return null;
+    } catch (error) {
+      console.warn('Failed to check desktop permissions', error);
+      return null;
+    }
   }, []);
 
   const applyPipelineTranscript = useCallback((payload: DesktopPipelineResponse) => {
@@ -182,9 +204,14 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     }
 
     try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), PIPELINE_REQUEST_TIMEOUT_MS);
       const response = await fetch(`${baseUrl}/pipeline/transcribe-analyze`, {
         method: 'POST',
         body: form,
+        signal: controller.signal,
+      }).finally(() => {
+        window.clearTimeout(timeoutId);
       });
 
       if (!response.ok) {
@@ -206,7 +233,10 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
         resetPipelineSession();
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const isTimeout = error instanceof DOMException && error.name === 'AbortError';
+      const message = isTimeout
+        ? `request timeout (${PIPELINE_REQUEST_TIMEOUT_MS}ms)`
+        : error instanceof Error ? error.message : String(error);
       notifyPipelineError(message);
       resetPipelineSession();
     }
@@ -366,18 +396,27 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     };
   }, [enqueuePipelineChunk, refreshDesktopAudioSources, stopBrowserRecognition]);
 
-  const startListening = useCallback(async (): Promise<StartListeningResult> => {
+  const startListeningForSource = useCallback(async (
+    source: CaptureInputSource,
+  ): Promise<StartListeningResult> => {
     if (isStartingRef.current || listeningRef.current) {
       return { ok: false, mode: 'none', message: 'すでに開始中です。' };
     }
 
+    inputSourceRef.current = source;
+    setInputSource(source);
     isStartingRef.current = true;
     setError(null);
     setDesktopChunkCount(0);
     resetPipelineSession();
 
     try {
-      if (inputSource === 'system_audio') {
+      const permissionError = await validateCapturePermission(source);
+      if (permissionError) {
+        return { ok: false, mode: 'none', message: permissionError };
+      }
+
+      if (source === 'system_audio') {
         if (!isDesktopCaptureAvailable || !window.desktopAPI?.startAudioCapture) {
           return { ok: false, mode: 'none', message: 'システム音声キャプチャはDesktop実行時のみ利用できます。' };
         }
@@ -446,7 +485,17 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     } finally {
       isStartingRef.current = false;
     }
-  }, [inputSource, isDesktopCaptureAvailable, resetPipelineSession, selectedDesktopSourceId, startBrowserRecognition]);
+  }, [
+    isDesktopCaptureAvailable,
+    resetPipelineSession,
+    selectedDesktopSourceId,
+    startBrowserRecognition,
+    validateCapturePermission,
+  ]);
+
+  const startListening = useCallback(() => {
+    return startListeningForSource(inputSourceRef.current);
+  }, [startListeningForSource]);
 
   const stopListening = useCallback(async () => {
     listeningRef.current = false;
@@ -457,6 +506,48 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     }
     await flushPipelineFinalChunk();
   }, [flushPipelineFinalChunk, stopBrowserRecognition]);
+
+  useEffect(() => {
+    if (!window.desktopAPI?.onTrayCommand) return;
+
+    const offTrayCommand = window.desktopAPI.onTrayCommand(async (command) => {
+      if (command.type === 'stop-capture') {
+        if (listeningRef.current) {
+          await stopListening();
+        }
+        return;
+      }
+
+      if (command.type === 'start-capture') {
+        if (listeningRef.current) return;
+        const result = await startListeningForSource(command.inputSource);
+        if (!result.ok && result.message) {
+          setError(result.message);
+        }
+        return;
+      }
+
+      if (command.type === 'set-input-source') {
+        if (command.restartIfCapturing && listeningRef.current) {
+          await stopListening();
+          inputSourceRef.current = command.inputSource;
+          setInputSource(command.inputSource);
+          const result = await startListeningForSource(command.inputSource);
+          if (!result.ok && result.message) {
+            setError(result.message);
+          }
+          return;
+        }
+
+        inputSourceRef.current = command.inputSource;
+        setInputSource(command.inputSource);
+      }
+    });
+
+    return () => {
+      offTrayCommand();
+    };
+  }, [startListeningForSource, stopListening]);
 
   const resetTranscript = useCallback(() => {
     browserTranscriptRef.current = '';

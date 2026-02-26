@@ -6,6 +6,7 @@ let captureSequence = 0;
 
 const chunkListeners = new Set();
 const captureErrorListeners = new Set();
+const trayCommandListeners = new Set();
 
 function emitAudioChunk(payload) {
   chunkListeners.forEach((listener) => {
@@ -24,6 +25,16 @@ function emitCaptureError(error) {
       listener({ message, raw: error });
     } catch (listenerError) {
       console.error("[desktop] onCaptureError listener error:", listenerError);
+    }
+  });
+}
+
+function emitTrayCommand(payload) {
+  trayCommandListeners.forEach((listener) => {
+    try {
+      listener(payload);
+    } catch (error) {
+      console.error("[desktop] onTrayCommand listener error:", error);
     }
   });
 }
@@ -235,6 +246,17 @@ function onCaptureError(callback) {
   };
 }
 
+function onTrayCommand(callback) {
+  trayCommandListeners.add(callback);
+  return () => {
+    trayCommandListeners.delete(callback);
+  };
+}
+
+ipcRenderer.on("desktop:trayCommand", (_event, payload) => {
+  emitTrayCommand(payload);
+});
+
 contextBridge.exposeInMainWorld("desktopAPI", {
   getAudioSources: () => ipcRenderer.invoke("desktop:getAudioSources"),
   startAudioCapture,
@@ -243,7 +265,10 @@ contextBridge.exposeInMainWorld("desktopAPI", {
   stopCapture: () => ipcRenderer.invoke("desktop:stopCapture"),
   getPermissions: () => ipcRenderer.invoke("desktop:getPermissions"),
   openSettings: (target) => ipcRenderer.invoke("desktop:openSettings", target),
+  getAutoLaunch: () => ipcRenderer.invoke("desktop:getAutoLaunch"),
+  setAutoLaunch: (enabled) => ipcRenderer.invoke("desktop:setAutoLaunch", { enabled }),
   onCaptureStateChanged,
   onAudioChunk,
   onCaptureError,
+  onTrayCommand,
 });

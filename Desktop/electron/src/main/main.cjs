@@ -103,6 +103,12 @@ function emitCaptureState() {
   });
 }
 
+function emitTrayCommand(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.webContents.send("desktop:trayCommand", payload);
+  return true;
+}
+
 function createTray() {
   if (tray) return;
 
@@ -120,6 +126,7 @@ function createTray() {
 
 function refreshTrayMenu() {
   if (!tray) return;
+  const openAtLogin = app.getLoginItemSettings().openAtLogin;
 
   const menu = Menu.buildFromTemplate([
     {
@@ -128,20 +135,61 @@ function refreshTrayMenu() {
     },
     { type: "separator" },
     {
+      label: "入力ソース",
+      submenu: [
+        {
+          label: "マイク入力",
+          type: "radio",
+          checked: captureInputSource === "microphone",
+          click: () => {
+            captureInputSource = "microphone";
+            emitCaptureState();
+            if (isCapturing) {
+              emitTrayCommand({
+                type: "set-input-source",
+                inputSource: "microphone",
+                restartIfCapturing: true,
+              });
+            }
+            refreshTrayMenu();
+          },
+        },
+        {
+          label: "システム音声",
+          type: "radio",
+          checked: captureInputSource === "system_audio",
+          click: () => {
+            captureInputSource = "system_audio";
+            emitCaptureState();
+            if (isCapturing) {
+              emitTrayCommand({
+                type: "set-input-source",
+                inputSource: "system_audio",
+                restartIfCapturing: true,
+              });
+            }
+            refreshTrayMenu();
+          },
+        },
+      ],
+    },
+    {
       label: isCapturing ? "音声取得を停止" : "音声取得を開始",
       click: () => {
-        isCapturing = !isCapturing;
-        emitCaptureState();
-        refreshTrayMenu();
+        if (isCapturing) {
+          emitTrayCommand({ type: "stop-capture" });
+          return;
+        }
+        emitTrayCommand({
+          type: "start-capture",
+          inputSource: captureInputSource,
+        });
       },
     },
     {
-      label: app.getLoginItemSettings().openAtLogin
-        ? "ログイン時起動を無効化"
-        : "ログイン時起動を有効化",
+      label: openAtLogin ? "ログイン時起動を無効化" : "ログイン時起動を有効化",
       click: () => {
-        const current = app.getLoginItemSettings().openAtLogin;
-        app.setLoginItemSettings({ openAtLogin: !current });
+        app.setLoginItemSettings({ openAtLogin: !openAtLogin });
         refreshTrayMenu();
       },
     },
@@ -233,6 +281,17 @@ function registerIpcHandlers() {
       return { ok: true };
     }
     return { ok: false };
+  });
+
+  ipcMain.handle("desktop:getAutoLaunch", async () => {
+    return { openAtLogin: app.getLoginItemSettings().openAtLogin };
+  });
+
+  ipcMain.handle("desktop:setAutoLaunch", async (_event, payload = {}) => {
+    const enabled = Boolean(payload && payload.enabled);
+    app.setLoginItemSettings({ openAtLogin: enabled });
+    refreshTrayMenu();
+    return { ok: true, openAtLogin: app.getLoginItemSettings().openAtLogin };
   });
 }
 

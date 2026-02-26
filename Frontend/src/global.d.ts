@@ -45,6 +45,11 @@ type DesktopPermissions = {
   screen: string;
 };
 
+type DesktopTrayCommand =
+  | { type: "start-capture"; inputSource: DesktopInputSource }
+  | { type: "stop-capture" }
+  | { type: "set-input-source"; inputSource: DesktopInputSource; restartIfCapturing?: boolean };
+
 interface Window {
   desktopAPI?: {
     getAudioSources: () => Promise<DesktopAudioSource[]>;
@@ -54,8 +59,11 @@ interface Window {
     stopCapture: () => Promise<DesktopCaptureResult>;
     getPermissions: () => Promise<DesktopPermissions>;
     openSettings: (target: "microphone" | "screen") => Promise<{ ok: boolean }>;
+    getAutoLaunch: () => Promise<{ openAtLogin: boolean }>;
+    setAutoLaunch: (enabled: boolean) => Promise<{ ok: boolean; openAtLogin: boolean }>;
     onCaptureStateChanged: (callback: (state: DesktopCaptureState) => void) => () => void;
     onAudioChunk: (callback: (chunk: DesktopAudioChunk) => void) => () => void;
     onCaptureError: (callback: (payload: { message: string; raw?: unknown }) => void) => () => void;
+    onTrayCommand: (callback: (command: DesktopTrayCommand) => void) => () => void;
   };
 }

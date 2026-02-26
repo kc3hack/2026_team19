@@ -38,17 +38,19 @@ bun run build:renderer
 bun run start
 ```
 
-## 実装済み（Day 1-4）
+## 実装済み（Day 1-5）
 
 - Tray 常駐
 - Window 表示/非表示
-- ログイン時起動トグル
+- ログイン時起動トグル（Tray + IPC）
 - IPC 土台（`desktop:*`）
   - `desktop:getAudioSources`
   - `desktop:startCapture`
   - `desktop:stopCapture`
   - `desktop:getPermissions`
   - `desktop:openSettings`
+  - `desktop:getAutoLaunch`
+  - `desktop:setAutoLaunch`
 - 音声キャプチャ PoC（preload）
   - `desktopAPI.startAudioCapture({ inputSource, sourceId, chunkMs })`
   - `desktopAPI.stopAudioCapture()`
@@ -59,6 +61,10 @@ bun run start
   - `onAudioChunk` ごとに `POST /pipeline/transcribe-analyze` を送信
   - `system_audio` では pipeline の `partial/final` を transcript に反映
   - `microphone` では Web Speech を優先しつつ pipeline へ並行送信
+- Day 5 操作導線
+  - Tray から `開始/停止` と `入力ソース切替` を実行可能
+  - Renderer 側で `desktop:trayCommand` を受信し、録音状態に反映
+  - pipeline送信にタイムアウト（12秒）と権限エラー判定を追加
 
 ## Day 2 の確認手順
 
@@ -68,7 +74,7 @@ bun run start
 4. `録音開始` を押す
 5. ヘッダーの `chunks:<number>` が増えることを確認
 
-## 既知の制約（Day 4 時点）
+## 既知の制約（Day 5 時点）
 
 - Backend 側 STT は現在スタブ実装（`text_override` 優先）です
 - `system_audio` で実用的な文字起こしを行うには、Backend 側の実STT接続が必要です
