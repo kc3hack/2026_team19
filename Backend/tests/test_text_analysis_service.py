@@ -2,6 +2,7 @@ import app.services.text_analysis as text_analysis
 from app.services.text_analysis import (
     dependency_parse,
     morphological_analysis,
+    tfidf_bubble_scores,
     tfidf_scores,
     top_terms_by_tfidf,
     vectorize_content_tokens,
@@ -164,3 +165,39 @@ def test_vectorize_sentence_hash_fallback_honors_normalize_flag(monkeypatch) -> 
     assert raw["sentence_vector"] != normalized["sentence_vector"]
     assert raw_norm > 1.0
     assert abs(normalized_norm - 1.0) < 1e-6
+
+
+def test_tfidf_bubble_scores_returns_per_utterance_scores() -> None:
+    result = tfidf_bubble_scores(
+        utterances=[
+            "今日はRAG設計を進めます。",
+            "RAG設計のレビューをします。",
+            "GPUメモリの見積もりを更新します。",
+        ],
+        top_k=2,
+        window_size=3,
+        min_bubble_size=24,
+        max_bubble_size=60,
+    )
+
+    assert result["meta"]["algorithm"] == "tfidf_topk_sum_v1"
+    assert result["meta"]["utterance_count"] == 3
+    assert len(result["items"]) == 3
+    assert all(0.0 <= item["normalized_score"] <= 1.0 for item in result["items"])
+    assert all(24 <= item["bubble_size"] <= 60 for item in result["items"])
+
+
+def test_tfidf_bubble_scores_exposes_top_terms_for_each_utterance() -> None:
+    result = tfidf_bubble_scores(
+        utterances=[
+            "API API API",
+            "API API API",
+            "量子耐性暗号の検証を進める",
+        ],
+        top_k=2,
+        window_size=3,
+    )
+
+    assert result["items"][2]["raw_score"] > 0.0
+    assert len(result["items"][2]["top_terms"]) > 0
+    assert all(term["term"] != "api" for term in result["items"][2]["top_terms"])

@@ -65,3 +65,42 @@ def test_vectorize_sentence_endpoint_validates_empty_text() -> None:
 def test_vectorize_sentence_endpoint_validates_whitespace_only_text() -> None:
     res = client.post("/analysis/vectorize/sentence", json={"text": "   "})
     assert res.status_code == 422
+
+
+def test_tfidf_bubble_scores_endpoint_returns_scores() -> None:
+    res = client.post(
+        "/analysis/tfidf/bubble-scores",
+        json={
+            "utterances": [
+                "今日はRAG設計を進めます。",
+                "APIのレイテンシを改善します。",
+                "GPUコストの見積もりを確認します。",
+            ],
+            "top_k": 3,
+            "window_size": 30,
+            "min_bubble_size": 28,
+            "max_bubble_size": 72,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+
+    assert "meta" in body
+    assert body["meta"]["algorithm"] == "tfidf_topk_sum_v1"
+    assert body["meta"]["utterance_count"] == 3
+    assert len(body["items"]) == 3
+    assert all(28 <= item["bubble_size"] <= 72 for item in body["items"])
+
+
+def test_tfidf_bubble_scores_endpoint_validates_blank_utterance() -> None:
+    res = client.post(
+        "/analysis/tfidf/bubble-scores",
+        json={
+            "utterances": ["有効な発話です", "   "],
+            "top_k": 3,
+            "window_size": 30,
+            "min_bubble_size": 28,
+            "max_bubble_size": 72,
+        },
+    )
+    assert res.status_code == 422

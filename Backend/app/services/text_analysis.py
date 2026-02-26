@@ -763,6 +763,109 @@ def top_terms_by_tfidf(corpus: list[str], top_k: int = 10) -> list[list[dict[str
     return top_terms
 
 
+def _percentile(values: list[float], quantile: float) -> float:
+    """Return interpolated percentile value in [0.0, 1.0]."""
+    if not values:
+        return 0.0
+
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+
+    position = (len(sorted_values) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(sorted_values[lower])
+
+    lower_value = float(sorted_values[lower])
+    upper_value = float(sorted_values[upper])
+    ratio = position - lower
+    return lower_value + (upper_value - lower_value) * ratio
+
+
+def tfidf_bubble_scores(
+    utterances: list[str],
+    top_k: int = 3,
+    window_size: int = 30,
+    min_bubble_size: int = 28,
+    max_bubble_size: int = 72,
+) -> dict[str, Any]:
+    """Calculate TF-IDF-based bubble sizes for utterance list."""
+    if not utterances:
+        return {
+            "meta": {
+                "algorithm": "tfidf_topk_sum_v1",
+                "top_k": top_k,
+                "window_size": window_size,
+                "min_bubble_size": min_bubble_size,
+                "max_bubble_size": max_bubble_size,
+                "p10": 0.0,
+                "p90": 0.0,
+                "utterance_count": 0,
+            },
+            "items": [],
+        }
+
+    cleaned = [utterance.strip() for utterance in utterances]
+    items: list[dict[str, Any]] = []
+    raw_scores: list[float] = []
+
+    # 発話 i ごとに「直近 window_size 発話」をコーパスとしてTF-IDFを算出する。
+    for i, utterance in enumerate(cleaned):
+        start = max(0, i - window_size + 1)
+        corpus = cleaned[start : i + 1]
+        current_score_map = tfidf_scores(corpus)[-1] if corpus else {}
+
+        sorted_terms = sorted(current_score_map.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        raw_score = float(sum(score for _, score in sorted_terms))
+        raw_scores.append(raw_score)
+
+        items.append(
+            {
+                "index": i,
+                "text": utterance,
+                "raw_score": round(raw_score, 6),
+                "normalized_score": 0.0,
+                "bubble_size": min_bubble_size,
+                "top_terms": [
+                    {"term": term, "score": round(float(score), 6)}
+                    for term, score in sorted_terms
+                ],
+            }
+        )
+
+    p10 = _percentile(raw_scores, 0.10)
+    p90 = _percentile(raw_scores, 0.90)
+
+    # p10/p90でロバスト正規化し、0..1をバブルサイズに線形マッピングする。
+    score_width = p90 - p10
+    for item, raw_score in zip(items, raw_scores):
+        if score_width <= 0.0:
+            normalized = 0.0 if raw_score <= 0.0 else 0.5
+        else:
+            normalized = (raw_score - p10) / score_width
+            normalized = max(0.0, min(1.0, normalized))
+
+        bubble_size = int(round(min_bubble_size + (max_bubble_size - min_bubble_size) * normalized))
+        item["normalized_score"] = round(normalized, 6)
+        item["bubble_size"] = bubble_size
+
+    return {
+        "meta": {
+            "algorithm": "tfidf_topk_sum_v1",
+            "top_k": top_k,
+            "window_size": window_size,
+            "min_bubble_size": min_bubble_size,
+            "max_bubble_size": max_bubble_size,
+            "p10": round(float(p10), 6),
+            "p90": round(float(p90), 6),
+            "utterance_count": len(cleaned),
+        },
+        "items": items,
+    }
+
+
 # --- refer_dictionary 向け: 形態素解析済みトークンから直接ベクトルを算出する ---
 # morphological_analysis を再度呼ばずに済むため、
 # スレッドセーフ問題を回避しつつパフォーマンスも改善できる。
@@ -845,4 +948,3 @@ def _get_vocab_vector(nlp: Any | None, word: str) -> list[float]:
         return [float(v) for v in lexeme.vector]
 
     return []
-
