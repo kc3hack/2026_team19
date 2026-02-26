@@ -1,0 +1,20 @@
+{
+  "name": "talkscope-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TalkScope macOS desktop shell (Electron)",
+  "packageManager": "bun@1.3.9",
+  "main": "src/main/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"bun run --cwd ../../Frontend dev\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "start": "electron .",
+    "build:renderer": "bun run --cwd ../../Frontend build",
+    "check": "node --check src/main/main.cjs && node --check src/preload/preload.cjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^40.6.1",
+    "wait-on": "^8.0.3"
+  }
+}
