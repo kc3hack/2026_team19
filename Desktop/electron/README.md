@@ -38,7 +38,7 @@ bun run build:renderer
 bun run start
 ```
 
-## 実装済み（Day 1-2）
+## 実装済み（Day 1-4）
 
 - Tray 常駐
 - Window 表示/非表示
@@ -55,6 +55,10 @@ bun run start
   - `desktopAPI.onAudioChunk(...)`
   - `desktopAPI.onCaptureError(...)`
   - マイク入力 / システム音声入力の切り替え
+- 統合API連携（Renderer）
+  - `onAudioChunk` ごとに `POST /pipeline/transcribe-analyze` を送信
+  - `system_audio` では pipeline の `partial/final` を transcript に反映
+  - `microphone` では Web Speech を優先しつつ pipeline へ並行送信
 
 ## Day 2 の確認手順
 
@@ -64,7 +68,7 @@ bun run start
 4. `録音開始` を押す
 5. ヘッダーの `chunks:<number>` が増えることを確認
 
-## 次に実装する内容（Day 3 以降）
+## 既知の制約（Day 4 時点）
 
-- STT/解析 統合API（`/pipeline/transcribe-analyze`）との接続
-- Renderer 側 UI 連携
+- Backend 側 STT は現在スタブ実装（`text_override` 優先）です
+- `system_audio` で実用的な文字起こしを行うには、Backend 側の実STT接続が必要です
