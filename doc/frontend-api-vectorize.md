@@ -18,6 +18,8 @@
   - 単語（内容語）ベクトルを返す
 - `POST /analysis/vectorize/sentence`
   - 文章全体の単一ベクトルを返す
+- `POST /analysis/tfidf/bubble-scores`
+  - 発話ごとのTF-IDFスコアと推奨バブルサイズを返す
 - 共通: `Content-Type: application/json`
 
 ## 3. リクエスト
@@ -226,5 +228,116 @@ export type SentenceVectorizeResponse = {
     content_token_count: number;
   };
   sentence_vector: number[];
+};
+```
+
+## 8. TF-IDF バブルスコアAPI（`/analysis/tfidf/bubble-scores`）
+
+### 8.1 リクエスト
+
+```json
+{
+  "utterances": [
+    "今日はRAGの設計を詰めます。",
+    "APIのレイテンシ改善も必要です。",
+    "GPUコストの見積もりも確認しましょう。"
+  ],
+  "top_k": 3,
+  "window_size": 30,
+  "min_bubble_size": 28,
+  "max_bubble_size": 72
+}
+```
+
+| 項目              | 型         | 必須 | 既定値 | 説明                                                |
+| ----------------- | ---------- | ---- | ------ | --------------------------------------------------- |
+| `utterances`      | `string[]` | 必須 | -      | バブル対象の発話配列（1要素=1バブル）              |
+| `top_k`           | `number`   | 任意 | `3`    | `raw_score` に加算する上位TF-IDF語数               |
+| `window_size`     | `number`   | 任意 | `30`   | TF-IDF算出に使うスライディング窓サイズ（発話数）   |
+| `min_bubble_size` | `number`   | 任意 | `28`   | 正規化スコア0のときの最小バブルサイズ(px)          |
+| `max_bubble_size` | `number`   | 任意 | `72`   | 正規化スコア1のときの最大バブルサイズ(px)          |
+
+補足:
+
+- 空配列、空白のみ発話、`max_bubble_size <= min_bubble_size` は `422` になります。
+
+### 8.2 レスポンス
+
+```jsonc
+{
+  "meta": {
+    "algorithm": "tfidf_topk_sum_v1",
+    "top_k": 3,
+    "window_size": 30,
+    "min_bubble_size": 28,
+    "max_bubble_size": 72,
+    "p10": 0.31211,
+    "p90": 1.98212,
+    "utterance_count": 3
+  },
+  "items": [
+    {
+      "index": 0,
+      "text": "今日はRAGの設計を詰めます。",
+      "raw_score": 1.423111,
+      "normalized_score": 0.665269,
+      "bubble_size": 57,
+      "top_terms": [
+        { "term": "rag", "score": 0.845212 },
+        { "term": "設計", "score": 0.577899 }
+      ]
+    }
+  ]
+}
+```
+
+| 項目                     | 型         | 説明                                                          |
+| ------------------------ | ---------- | ------------------------------------------------------------- |
+| `meta.algorithm`         | `string`   | 算出アルゴリズム識別子（現状: `tfidf_topk_sum_v1`）          |
+| `meta.p10` / `meta.p90` | `number`   | `raw_score` の正規化に使った分位点                            |
+| `meta.utterance_count`   | `number`   | 入力発話数                                                    |
+| `items[]`                | `object[]` | 発話ごとのバブルスコア                                        |
+| `items[].index`          | `number`   | `utterances` 内の位置                                         |
+| `items[].text`           | `string`   | 対象発話（そのまま返却）                                      |
+| `items[].raw_score`      | `number`   | 上位 `top_k` 語のTF-IDF合計スコア                             |
+| `items[].normalized_score` | `number` | `p10/p90` 正規化後の 0..1 スコア                              |
+| `items[].bubble_size`    | `number`   | 推奨バブルサイズ(px)                                           |
+| `items[].top_terms`      | `object[]` | 発話内のTF-IDF上位語（最大 `top_k` 件）                       |
+| `items[].top_terms[].term` | `string` | 上位語                                                        |
+| `items[].top_terms[].score` | `number` | 上位語のTF-IDFスコア                                          |
+
+### 8.3 TypeScript 型サンプル
+
+```ts
+export type TfidfBubbleScoresRequest = {
+  utterances: string[];
+  top_k?: number;
+  window_size?: number;
+  min_bubble_size?: number;
+  max_bubble_size?: number;
+};
+
+export type TfidfBubbleScoresResponse = {
+  meta: {
+    algorithm: "tfidf_topk_sum_v1" | string;
+    top_k: number;
+    window_size: number;
+    min_bubble_size: number;
+    max_bubble_size: number;
+    p10: number;
+    p90: number;
+    utterance_count: number;
+  };
+  items: Array<{
+    index: number;
+    text: string;
+    raw_score: number;
+    normalized_score: number;
+    bubble_size: number;
+    top_terms: Array<{
+      term: string;
+      score: number;
+    }>;
+  }>;
 };
 ```

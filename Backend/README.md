@@ -111,6 +111,47 @@ Cloud Run へのデプロイ手順は以下を参照してください。
       "sentence_vector": [0.0312, -0.0124, 0.2011, -0.0942]
     }
     ```
+
+- `POST /analysis/tfidf/bubble-scores`
+  - 発話ごとのTF-IDFスコアから、バブルUI向けサイズを算出する
+  - 算出ロジック: `raw_score = 上位top_k語のTF-IDF合計` を `p10/p90` で正規化し、`min/max` サイズへマッピング
+  - リクエスト例:
+    ```json
+    {
+      "utterances": [
+        "今日はRAGの設計を詰めます。",
+        "APIのレイテンシ改善も必要です。",
+        "GPUコストの見積もりも確認しましょう。"
+      ],
+      "top_k": 3,
+      "window_size": 30,
+      "min_bubble_size": 28,
+      "max_bubble_size": 72
+    }
+    ```
+  - レスポンス例（抜粋）:
+    ```json
+    {
+      "meta": {
+        "algorithm": "tfidf_topk_sum_v1",
+        "p10": 0.31211,
+        "p90": 1.98212,
+        "utterance_count": 3
+      },
+      "items": [
+        {
+          "index": 0,
+          "text": "今日はRAGの設計を詰めます。",
+          "raw_score": 1.423111,
+          "normalized_score": 0.665269,
+          "bubble_size": 57,
+          "top_terms": [
+            { "term": "rag", "score": 0.845212 }
+          ]
+        }
+      ]
+    }
+    ```
   - レスポンス例（抜粋）:
     ```json
     {

@@ -6,10 +6,16 @@ from app.schemas.analysis import (
     ReferDictionaryEntry,
     SentenceVectorizeRequest,
     SentenceVectorizeResponse,
+    TfidfBubbleScoresRequest,
+    TfidfBubbleScoresResponse,
     VectorizeRequest,
     VectorizeResponse,
 )
-from app.services.text_analysis import vectorize_content_tokens, vectorize_sentence
+from app.services.text_analysis import (
+    tfidf_bubble_scores,
+    vectorize_content_tokens,
+    vectorize_sentence,
+)
 from app.services.refer_dictionary import refer_dictionary
 
 router = fastapi.APIRouter()
@@ -93,6 +99,51 @@ def vectorize_sentence_endpoint(
 ) -> SentenceVectorizeResponse:
     result = vectorize_sentence(text=body.text, normalize=body.normalize)
     return SentenceVectorizeResponse(**result)
+
+
+@router.post(
+    "/tfidf/bubble-scores",
+    response_model=TfidfBubbleScoresResponse,
+    summary="発話ごとのTF-IDFスコアからバブルサイズを算出する",
+    description=(
+        "1発話=1バブルとしてTF-IDFを算出し、"
+        "上位top_k語のスコア合計を p10/p90 基準で正規化してバブルサイズに変換します。"
+    ),
+    response_description="発話ごとのTF-IDFバブルスコア",
+    responses={
+        200: {"description": "算出成功"},
+        422: {"description": "入力バリデーションエラー（空配列・空白発話など）"},
+    },
+)
+def tfidf_bubble_scores_endpoint(
+    body: TfidfBubbleScoresRequest = fastapi.Body(
+        ...,
+        examples={
+            "default": {
+                "summary": "既定パラメータで算出",
+                "value": {
+                    "utterances": [
+                        "今日はRAGの設計を詰めます。",
+                        "APIのレイテンシ改善も必要です。",
+                        "GPUコストの見積もりも確認しましょう。",
+                    ],
+                    "top_k": 3,
+                    "window_size": 30,
+                    "min_bubble_size": 28,
+                    "max_bubble_size": 72,
+                },
+            }
+        },
+    )
+) -> TfidfBubbleScoresResponse:
+    result = tfidf_bubble_scores(
+        utterances=body.utterances,
+        top_k=body.top_k,
+        window_size=body.window_size,
+        min_bubble_size=body.min_bubble_size,
+        max_bubble_size=body.max_bubble_size,
+    )
+    return TfidfBubbleScoresResponse(**result)
 
 
 @router.post(
