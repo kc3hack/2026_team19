@@ -46,6 +46,7 @@ app = fastapi.FastAPI(
     openapi_tags=[
         {"name": "analysis", "description": "テキスト解析・ベクトル化API"},
         {"name": "dictionary", "description": "単語の意味概要検索API"},
+        {"name": "pipeline", "description": "Desktop向け統合パイプラインAPI"},
         {"name": "hoge", "description": "サンプルAPI"},
     ],
     lifespan=lifespan,
