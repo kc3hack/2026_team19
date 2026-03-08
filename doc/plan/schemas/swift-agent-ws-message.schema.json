@@ -1,0 +1,640 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lexiflow.local/schemas/swift-agent-ws-message.schema.json",
+  "title": "Swift Agent WebSocket Message",
+  "type": "object",
+  "required": [
+    "version",
+    "kind",
+    "name",
+    "timestamp_ms",
+    "payload"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "command",
+        "event",
+        "response"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "command"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/$defs/commandByName"
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "event"
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/eventByName"
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "response"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/$defs/responseByName"
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "inputSource": {
+      "type": "string",
+      "enum": [
+        "microphone",
+        "system_audio"
+      ]
+    },
+    "commandByName": {
+      "oneOf": [
+        {
+          "properties": {
+            "name": {
+              "const": "hello"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "client",
+                "protocol_version"
+              ],
+              "properties": {
+                "client": {
+                  "type": "string",
+                  "enum": [
+                    "electron"
+                  ]
+                },
+                "protocol_version": {
+                  "type": "string",
+                  "const": "1.0.0"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "get_status"
+            },
+            "payload": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "start_capture"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "session_id",
+                "sources"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/inputSource"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "language": {
+                  "type": "string",
+                  "default": "ja-JP"
+                },
+                "emit_partials": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "analyze_on_final": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "include_dictionary": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "stop_capture"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "set_source_enabled"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "source",
+                "enabled"
+              ],
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/inputSource"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "open_settings"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "target"
+              ],
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "enum": [
+                    "microphone",
+                    "screen",
+                    "speech"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "set_auto_launch"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "enabled"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "eventByName": {
+      "oneOf": [
+        {
+          "properties": {
+            "name": {
+              "const": "ready"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "agent_version",
+                "capabilities"
+              ],
+              "properties": {
+                "agent_version": {
+                  "type": "string"
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "state_changed"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "is_capturing",
+                "session_id",
+                "active_sources",
+                "permissions"
+              ],
+              "properties": {
+                "is_capturing": {
+                  "type": "boolean"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "active_sources": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/inputSource"
+                  },
+                  "uniqueItems": true
+                },
+                "permissions": {
+                  "type": "object",
+                  "required": [
+                    "microphone",
+                    "screen",
+                    "speech"
+                  ],
+                  "properties": {
+                    "microphone": {
+                      "type": "string"
+                    },
+                    "screen": {
+                      "type": "string"
+                    },
+                    "speech": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "partial_transcript"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/transcriptPayloadBase"
+                },
+                {
+                  "properties": {
+                    "is_final": {
+                      "const": false
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "final_transcript"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/transcriptPayloadBase"
+                },
+                {
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "is_final": {
+                      "const": true
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "analysis_result"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "session_id",
+                "source",
+                "utterance_id",
+                "analysis"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                },
+                "source": {
+                  "$ref": "#/$defs/inputSource"
+                },
+                "utterance_id": {
+                  "type": "string"
+                },
+                "analysis": {
+                  "type": "object"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "permission_required"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "target",
+                "message"
+              ],
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "enum": [
+                    "microphone",
+                    "screen",
+                    "speech"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "capture_stopped"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "session_id"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "error"
+            },
+            "payload": {
+              "$ref": "#/$defs/errorPayload"
+            }
+          }
+        }
+      ]
+    },
+    "responseByName": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "error": {
+              "$ref": "#/$defs/errorPayload"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "ok": {
+                    "const": false
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "error"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "transcriptPayloadBase": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "source",
+        "utterance_id",
+        "seq",
+        "text",
+        "is_final",
+        "start_ms",
+        "end_ms"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/inputSource"
+        },
+        "utterance_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        },
+        "is_final": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "language": {
+          "type": "string"
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "errorPayload": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "recoverable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "PERMISSION_DENIED_MICROPHONE",
+            "PERMISSION_DENIED_SCREEN",
+            "PERMISSION_DENIED_SPEECH",
+            "SYSTEM_AUDIO_NOT_SUPPORTED",
+            "CAPTURE_START_FAILED",
+            "STT_NOT_AVAILABLE",
+            "BACKEND_TIMEOUT",
+            "BACKEND_UNAVAILABLE",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "recoverable": {
+          "type": "boolean"
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -20,6 +20,23 @@ bun run dev
 - 開発サーバー: `http://localhost:5173`
 - 推奨ブラウザ: Chrome 系（Web Speech API 利用のため）
 
+## Desktop 連携切替（POST / Swift WS）
+
+`Frontend/.env` に以下を設定すると、Desktop 実行時の音声連携方式を切り替えられます。
+
+```bash
+# 既存: Electron音声チャンク -> Backend POST
+VITE_DESKTOP_CAPTURE_TRANSPORT=post
+
+# 新規: Electron/Frontend -> Swift Capture Agent WebSocket
+# VITE_DESKTOP_CAPTURE_TRANSPORT=swift_ws
+# VITE_SWIFT_AGENT_WS_URL=ws://127.0.0.1:55100/ws
+# VITE_SWIFT_AGENT_WS_PROTOCOL=lexiflow.capture.v1
+```
+
+- `post`: 既存の `POST /pipeline/transcribe-analyze` 経路を使用します。
+- `swift_ws`: Swift Agent の `ws://127.0.0.1:55100/ws` に接続し、`start_capture`/`stop_capture` を送信、`partial_transcript`/`final_transcript` を受信します。
+
 ## Docker で起動
 
 ルートディレクトリ（`/Users/honmayuudai/MyHobby/hackson/KC3Hack2026`）で実行してください。

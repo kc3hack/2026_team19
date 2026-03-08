@@ -132,6 +132,19 @@ Cloud Run へのデプロイ手順は以下を参照してください。
     }
     ```
 
+- `POST /pipeline/transcribe-analyze`
+  - Desktop向け統合API。音声チャンクを受け取り、文字起こし（MVPでは `text_override` 指定可）と解析結果を1レスポンスで返す
+  - `is_final_chunk=false` の場合は解析をスキップし、partialテキストのみ返す
+  - `is_final_chunk=true` の場合は内容語ベクトル化・文ベクトル化・（必要時）辞書参照を返す
+  - 主要フォーム項目: `audio`, `session_id`, `chunk_seq`, `is_final_chunk`, `input_source`, `audio_format`, `include_dictionary`
+  - `audio_format` は `wav | pcm16 | webm_opus` をサポート
+
+- `POST /pipeline/analyze-text`
+  - Swift Agent 向けテキスト解析API。文字起こし済みテキストを受け取り、解析結果を返す
+  - `is_final=false` の場合は解析と辞書参照をスキップする
+  - `is_final=true` の場合は内容語ベクトル化・文ベクトル化・（必要時）辞書参照を返す
+  - 主要JSON項目: `session_id`, `source`, `utterance_id`, `seq`, `text`, `is_final`, `start_ms`, `end_ms`, `include_dictionary`
+
 - `POST /dictionary/lookup`
   - 用語の意味を日本語で1〜2文の概要として返す
   - このエンドポイントは現在DB参照未連携のため、常にGeminiで生成する
@@ -210,15 +223,18 @@ Backend/
     │   └── endpoints/
     │       ├── analysis.py
     │       ├── dictionary.py
-    │       └── hoge.py
+    │       ├── hoge.py
+    │       └── pipeline.py
     ├── services/
     │   ├── dictionary.py
+    │   ├── speech_pipeline.py
     │   ├── text_analysis.py
     │   └── hoge.py
     └── schemas/
         ├── analysis.py
         ├── dictionary.py
-        └── hoge.py
+        ├── hoge.py
+        └── pipeline.py
 ```
 
 ## 今後の実装予定
