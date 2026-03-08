@@ -14,13 +14,17 @@ const {
 const APP_NAME = "TalkScope Desktop";
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || "";
 const isMac = process.platform === "darwin";
+const TRAY_TITLE = "TS";
 
 let mainWindow = null;
 let tray = null;
+let trayMenu = null;
 let isQuitting = false;
 let isCapturing = false;
 let captureInputSource = "microphone";
 let captureSourceId = null;
+let trayTranscriptSummary = "";
+let trayTerms = [];
 
 const PRIVACY_SETTINGS_URLS = {
   microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
@@ -30,12 +34,33 @@ const PRIVACY_SETTINGS_URLS = {
 function createTrayIcon() {
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-    <circle cx="11" cy="11" r="8" fill="black"/>
+    <circle cx="11" cy="11" r="7" fill="black"/>
+    <circle cx="11" cy="11" r="2.5" fill="white"/>
   </svg>`;
   const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   const icon = nativeImage.createFromDataURL(dataUrl).resize({ width: 18, height: 18 });
   icon.setTemplateImage(true);
+  if (icon.isEmpty()) {
+    console.warn("[desktop] tray icon is empty");
+  }
   return icon;
+}
+
+function chunkMenuText(text, maxLength = 28, maxLines = 3) {
+  const compact = String(text || "").replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return ["説明はまだありません"];
+  }
+
+  const lines = [];
+  for (let index = 0; index < compact.length && lines.length < maxLines; index += maxLength) {
+    let part = compact.slice(index, index + maxLength);
+    if (index + maxLength < compact.length && lines.length === maxLines - 1) {
+      part = `${compact.slice(index, index + Math.max(0, maxLength - 1))}…`;
+    }
+    lines.push(part);
+  }
+  return lines;
 }
 
 function createMainWindow() {
@@ -114,12 +139,16 @@ function createTray() {
 
   tray = new Tray(createTrayIcon());
   tray.setToolTip(APP_NAME);
+  if (isMac && typeof tray.setTitle === "function") {
+    tray.setTitle(TRAY_TITLE);
+  }
   tray.on("click", () => {
-    if (!mainWindow || !mainWindow.isVisible()) {
-      showMainWindow();
-      return;
-    }
-    hideMainWindow();
+    if (!trayMenu) return;
+    tray.popUpContextMenu(trayMenu);
+  });
+  tray.on("right-click", () => {
+    if (!trayMenu) return;
+    tray.popUpContextMenu(trayMenu);
   });
   refreshTrayMenu();
 }
@@ -127,11 +156,35 @@ function createTray() {
 function refreshTrayMenu() {
   if (!tray) return;
   const openAtLogin = app.getLoginItemSettings().openAtLogin;
+  const transcriptLabel = trayTranscriptSummary || "まだ文字起こしはありません";
+  const termMenuItems =
+    trayTerms.length > 0
+      ? trayTerms.map((term) => ({
+          label: `・${term.term}`,
+          submenu: chunkMenuText(term.description).map((line) => ({
+            label: line,
+            enabled: false,
+          })),
+        }))
+      : [
+          {
+            label: "まだ抽出された単語はありません",
+            enabled: false,
+          },
+        ];
 
-  const menu = Menu.buildFromTemplate([
+  trayMenu = Menu.buildFromTemplate([
     {
       label: "ウィンドウを開く",
       click: showMainWindow,
+    },
+    {
+      label: isCapturing ? "状態: 収集中" : "状態: 停止中",
+      enabled: false,
+    },
+    {
+      label: captureInputSource === "system_audio" ? "入力: システム音声" : "入力: マイク入力",
+      enabled: false,
     },
     { type: "separator" },
     {
@@ -186,6 +239,22 @@ function refreshTrayMenu() {
         });
       },
     },
+    { type: "separator" },
+    {
+      label: "直近の文字起こし",
+      enabled: false,
+    },
+    {
+      label: transcriptLabel,
+      enabled: false,
+    },
+    { type: "separator" },
+    {
+      label: "注目ワード",
+      enabled: false,
+    },
+    ...termMenuItems,
+    { type: "separator" },
     {
       label: openAtLogin ? "ログイン時起動を無効化" : "ログイン時起動を有効化",
       click: () => {
@@ -203,7 +272,7 @@ function refreshTrayMenu() {
     },
   ]);
 
-  tray.setContextMenu(menu);
+  tray.setContextMenu(trayMenu);
 }
 
 function getPermissionStatus() {
@@ -268,6 +337,35 @@ function registerIpcHandlers() {
     emitCaptureState();
     refreshTrayMenu();
     return { ok: true, isCapturing, inputSource: captureInputSource, sourceId: null };
+  });
+
+  ipcMain.handle("desktop:updateTraySummary", async (_event, payload = {}) => {
+    const transcriptSummary =
+      payload && typeof payload.transcriptSummary === "string"
+        ? payload.transcriptSummary.trim()
+        : "";
+    const terms =
+      payload && Array.isArray(payload.terms)
+        ? payload.terms
+            .filter((term) => term && typeof term.term === "string")
+            .map((term) => ({
+              term: term.term.trim(),
+              description:
+                typeof term.description === "string" && term.description.trim()
+                  ? term.description.trim()
+                  : "説明はまだありません",
+            }))
+            .filter((term) => term.term)
+            .slice(0, 5)
+        : [];
+
+    trayTranscriptSummary = transcriptSummary.slice(0, 80);
+    trayTerms = terms.map((term) => ({
+      term: term.term.slice(0, 24),
+      description: term.description,
+    }));
+    refreshTrayMenu();
+    return { ok: true };
   });
 
   ipcMain.handle("desktop:getPermissions", async () => {

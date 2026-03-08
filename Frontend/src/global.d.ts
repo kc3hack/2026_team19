@@ -45,6 +45,16 @@ type DesktopPermissions = {
   screen: string;
 };
 
+type DesktopTrayTermSummary = {
+  term: string;
+  description: string;
+};
+
+type DesktopTraySummaryPayload = {
+  transcriptSummary: string;
+  terms: DesktopTrayTermSummary[];
+};
+
 type DesktopTrayCommand =
   | { type: "start-capture"; inputSource: DesktopInputSource }
   | { type: "stop-capture" }
@@ -57,6 +67,7 @@ interface Window {
     stopAudioCapture: () => Promise<DesktopCaptureResult>;
     startCapture: () => Promise<DesktopCaptureResult>;
     stopCapture: () => Promise<DesktopCaptureResult>;
+    updateTraySummary: (payload: DesktopTraySummaryPayload) => Promise<{ ok: boolean }>;
     getPermissions: () => Promise<DesktopPermissions>;
     openSettings: (target: "microphone" | "screen") => Promise<{ ok: boolean }>;
     getAutoLaunch: () => Promise<{ openAtLogin: boolean }>;

@@ -263,6 +263,7 @@ contextBridge.exposeInMainWorld("desktopAPI", {
   stopAudioCapture,
   startCapture: () => ipcRenderer.invoke("desktop:startCapture"),
   stopCapture: () => ipcRenderer.invoke("desktop:stopCapture"),
+  updateTraySummary: (payload) => ipcRenderer.invoke("desktop:updateTraySummary", payload),
   getPermissions: () => ipcRenderer.invoke("desktop:getPermissions"),
   openSettings: (target) => ipcRenderer.invoke("desktop:openSettings", target),
   getAutoLaunch: () => ipcRenderer.invoke("desktop:getAutoLaunch"),

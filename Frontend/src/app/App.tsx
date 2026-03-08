@@ -41,6 +41,13 @@ const PRESETS = [
   { key: 'vertical', label: '縦4列', make: makeVerticalLayout },
 ] as const;
 
+function buildTrayTranscriptSummary(transcript: string): string {
+  const compact = transcript.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  if (compact.length <= 80) return compact;
+  return `…${compact.slice(-80)}`;
+}
+
 const App: React.FC = () => {
   const appendApiDictionaryEntries = useCallback((entries: SwiftDictionaryEntry[]) => {
     const newTerms: Term[] = [];
@@ -138,6 +145,29 @@ const App: React.FC = () => {
   const failedWordSetRef = useRef<Set<string>>(new Set());
 
   const normalizeWordKey = useCallback((word: string) => word.trim().toLowerCase(), []);
+
+  useEffect(() => {
+    if (!window.desktopAPI?.updateTraySummary) return;
+
+    const timer = window.setTimeout(() => {
+      const terms = activeTerms
+        .slice(0, 5)
+        .map((term) => ({
+          term: term.word.trim(),
+          description: (term.shortDesc || term.longDesc || '').trim(),
+        }))
+        .filter((term) => term.term);
+
+      void window.desktopAPI?.updateTraySummary({
+        transcriptSummary: buildTrayTranscriptSummary(transcript),
+        terms,
+      });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeTerms, transcript]);
 
   // 起動時に IndexedDB からピン留め一覧を復元
   useEffect(() => {
