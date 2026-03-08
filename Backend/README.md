@@ -139,6 +139,12 @@ Cloud Run へのデプロイ手順は以下を参照してください。
   - 主要フォーム項目: `audio`, `session_id`, `chunk_seq`, `is_final_chunk`, `input_source`, `audio_format`, `include_dictionary`
   - `audio_format` は `wav | pcm16 | webm_opus` をサポート
 
+- `POST /pipeline/analyze-text`
+  - Swift Agent 向けテキスト解析API。文字起こし済みテキストを受け取り、解析結果を返す
+  - `is_final=false` の場合は解析と辞書参照をスキップする
+  - `is_final=true` の場合は内容語ベクトル化・文ベクトル化・（必要時）辞書参照を返す
+  - 主要JSON項目: `session_id`, `source`, `utterance_id`, `seq`, `text`, `is_final`, `start_ms`, `end_ms`, `include_dictionary`
+
 - `POST /dictionary/lookup`
   - 用語の意味を日本語で1〜2文の概要として返す
   - このエンドポイントは現在DB参照未連携のため、常にGeminiで生成する

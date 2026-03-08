@@ -2,6 +2,48 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 type CaptureInputSource = 'microphone' | 'system_audio';
 type PipelineAudioFormat = 'wav' | 'pcm16' | 'webm_opus';
+type DesktopCaptureTransport = 'post' | 'swift_ws';
+
+type SwiftMessageKind = 'command' | 'event' | 'response';
+
+type SwiftEnvelope = {
+  version: string;
+  kind: SwiftMessageKind;
+  name: string;
+  request_id?: string;
+  timestamp_ms: number;
+  payload: Record<string, unknown>;
+};
+
+type SwiftErrorPayload = {
+  code: string;
+  message: string;
+  recoverable: boolean;
+  hint?: string;
+};
+
+type SwiftResponsePayload = {
+  ok: boolean;
+  error?: SwiftErrorPayload;
+  [key: string]: unknown;
+};
+
+type SwiftTranscriptPayload = {
+  source: CaptureInputSource;
+  text: string;
+  is_final: boolean;
+};
+
+export type SwiftDictionaryEntry = {
+  term: string;
+  description: string;
+  meaning_vector: number[] | null;
+  source: string;
+};
+
+type UseSpeechRecognitionOptions = {
+  onDictionaryResults?: (entries: SwiftDictionaryEntry[]) => void;
+};
 
 type StartListeningResult = {
   ok: boolean;
@@ -44,6 +86,22 @@ interface UseSpeechRecognitionReturn {
 
 const PIPELINE_ERROR_NOTIFY_INTERVAL_MS = 5000;
 const PIPELINE_REQUEST_TIMEOUT_MS = 12000;
+const SWIFT_WS_COMMAND_TIMEOUT_MS = 8000;
+
+const resolveDesktopCaptureTransport = (): DesktopCaptureTransport => {
+  const raw = (import.meta.env.VITE_DESKTOP_CAPTURE_TRANSPORT ?? 'post').trim().toLowerCase();
+  return raw === 'swift_ws' ? 'swift_ws' : 'post';
+};
+
+const createRequestId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
 
 const createPipelineSessionId = (): string =>
   `desktop_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -63,7 +121,10 @@ const appendCommittedTranscript = (current: string, finalText: string): string =
   return `${current}\n${finalText}`;
 };
 
-export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
+export const useSpeechRecognition = (
+  options: UseSpeechRecognitionOptions = {},
+): UseSpeechRecognitionReturn => {
+  const { onDictionaryResults } = options;
   const [transcript, setTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +140,7 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   const recognitionActiveRef = useRef(false);
   const inputSourceRef = useRef<CaptureInputSource>('microphone');
   const browserTranscriptRef = useRef('');
+  const captureTransportRef = useRef<DesktopCaptureTransport>(resolveDesktopCaptureTransport());
 
   const backendBaseUrlRef = useRef(
     (import.meta.env.VITE_BACKEND_URL ?? '').trim() ||
@@ -90,6 +152,17 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   const pipelinePartialTextRef = useRef('');
   const pipelineQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastPipelineErrorAtRef = useRef(0);
+  const swiftWsRef = useRef<WebSocket | null>(null);
+  const swiftWsConnectingRef = useRef<Promise<WebSocket> | null>(null);
+  const swiftWsPendingCommandsRef = useRef(new Map<string, {
+    resolve: (payload: SwiftResponsePayload) => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  }>());
+  const swiftCommittedTextRef = useRef('');
+  const swiftPartialTextBySourceRef = useRef<Partial<Record<CaptureInputSource, string>>>({});
+  const swiftWsUrlRef = useRef((import.meta.env.VITE_SWIFT_AGENT_WS_URL ?? 'ws://127.0.0.1:55100/ws').trim());
+  const swiftWsProtocolRef = useRef((import.meta.env.VITE_SWIFT_AGENT_WS_PROTOCOL ?? 'lexiflow.capture.v1').trim() || 'lexiflow.capture.v1');
 
   useEffect(() => {
     inputSourceRef.current = inputSource;
@@ -108,6 +181,252 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     pipelineCommittedTextRef.current = '';
     pipelinePartialTextRef.current = '';
   }, []);
+
+  const resetSwiftTranscriptSession = useCallback(() => {
+    swiftCommittedTextRef.current = '';
+    swiftPartialTextBySourceRef.current = {};
+  }, []);
+
+  const applySwiftTranscript = useCallback((payload: SwiftTranscriptPayload) => {
+    const text = payload.text.trim();
+    if (!text) return;
+
+    if (payload.is_final) {
+      swiftCommittedTextRef.current = appendCommittedTranscript(swiftCommittedTextRef.current, text);
+      delete swiftPartialTextBySourceRef.current[payload.source];
+    } else {
+      swiftPartialTextBySourceRef.current[payload.source] = text;
+    }
+
+    const partials = Object.values(swiftPartialTextBySourceRef.current)
+      .map((value) => value?.trim() ?? '')
+      .filter(Boolean);
+    const nextTranscript = [swiftCommittedTextRef.current, ...partials].filter(Boolean).join('\n');
+    setTranscript(nextTranscript);
+    browserTranscriptRef.current = nextTranscript;
+  }, []);
+
+  const makeSwiftEnvelope = useCallback((
+    kind: SwiftMessageKind,
+    name: string,
+    payload: Record<string, unknown>,
+    requestId?: string,
+  ): SwiftEnvelope => ({
+    version: '1.0.0',
+    kind,
+    name,
+    request_id: requestId,
+    timestamp_ms: Date.now(),
+    payload,
+  }), []);
+
+  const handleSwiftEvent = useCallback((name: string, payload: Record<string, unknown>) => {
+    switch (name) {
+      case 'partial_transcript':
+      case 'final_transcript': {
+        const source = payload.source;
+        const text = payload.text;
+        const isFinal = payload.is_final;
+        if (
+          (source === 'microphone' || source === 'system_audio')
+          && typeof text === 'string'
+          && typeof isFinal === 'boolean'
+        ) {
+          applySwiftTranscript({ source, text, is_final: isFinal });
+        }
+        return;
+      }
+      case 'state_changed': {
+        const isCapturing = payload.is_capturing;
+        if (typeof isCapturing === 'boolean') {
+          listeningRef.current = isCapturing;
+          setIsListening(isCapturing);
+        }
+        return;
+      }
+      case 'permission_required': {
+        const message = payload.message;
+        if (typeof message === 'string' && message.trim()) {
+          setError(message);
+        }
+        return;
+      }
+      case 'capture_stopped': {
+        listeningRef.current = false;
+        setIsListening(false);
+        return;
+      }
+      case 'error': {
+        const message = typeof payload.message === 'string' ? payload.message : 'unknown error';
+        const code = typeof payload.code === 'string' ? payload.code : 'INTERNAL_ERROR';
+        setError(`Swift Agentエラー (${code}): ${message}`);
+        if (payload.recoverable === false) {
+          listeningRef.current = false;
+          setIsListening(false);
+        }
+        return;
+      }
+      case 'analysis_result': {
+        const dictionary = payload.dictionary;
+        if (!isRecord(dictionary)) return;
+        const entries = dictionary.entries;
+        if (!Array.isArray(entries)) return;
+
+        const normalizedEntries: SwiftDictionaryEntry[] = entries.flatMap((entry) => {
+          if (!isRecord(entry)) return [];
+          if (typeof entry.term !== 'string' || typeof entry.description !== 'string') return [];
+
+          const meaningVector = Array.isArray(entry.meaning_vector)
+            ? entry.meaning_vector.filter((value): value is number => typeof value === 'number')
+            : null;
+
+          return [{
+            term: entry.term,
+            description: entry.description,
+            meaning_vector: meaningVector,
+            source: typeof entry.source === 'string' ? entry.source : 'swift_analysis',
+          }];
+        });
+
+        if (normalizedEntries.length > 0) {
+          onDictionaryResults?.(normalizedEntries);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }, [applySwiftTranscript, onDictionaryResults]);
+
+  const rejectAllSwiftPendingCommands = useCallback((message: string) => {
+    swiftWsPendingCommandsRef.current.forEach((pending, requestId) => {
+      window.clearTimeout(pending.timeoutId);
+      pending.reject(new Error(message));
+      swiftWsPendingCommandsRef.current.delete(requestId);
+    });
+  }, []);
+
+  const ensureSwiftWsConnected = useCallback(async (): Promise<WebSocket> => {
+    const existing = swiftWsRef.current;
+    if (existing && existing.readyState === WebSocket.OPEN) {
+      return existing;
+    }
+
+    if (swiftWsConnectingRef.current) {
+      return swiftWsConnectingRef.current;
+    }
+
+    const wsUrl = swiftWsUrlRef.current;
+    if (!wsUrl) {
+      throw new Error('VITE_SWIFT_AGENT_WS_URL が未設定です。');
+    }
+
+    const connectPromise = new Promise<WebSocket>((resolve, reject) => {
+      let settled = false;
+      const ws = new WebSocket(wsUrl, swiftWsProtocolRef.current);
+      swiftWsRef.current = ws;
+
+      ws.onopen = () => {
+        settled = true;
+        swiftWsConnectingRef.current = null;
+        resolve(ws);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const raw = JSON.parse(String(event.data)) as unknown;
+          if (!isRecord(raw)) return;
+          const envelope = raw as Partial<SwiftEnvelope>;
+          if (!isRecord(envelope.payload)) return;
+
+          if (envelope.kind === 'response' && typeof envelope.request_id === 'string') {
+            const pending = swiftWsPendingCommandsRef.current.get(envelope.request_id);
+            if (!pending) return;
+            swiftWsPendingCommandsRef.current.delete(envelope.request_id);
+            window.clearTimeout(pending.timeoutId);
+            const payload = envelope.payload as SwiftResponsePayload;
+            if (payload.ok) {
+              pending.resolve(payload);
+            } else {
+              const errorMessage =
+                typeof payload.error?.message === 'string'
+                  ? payload.error.message
+                  : `Swift Agent command failed: ${envelope.name ?? 'unknown'}`;
+              pending.reject(new Error(errorMessage));
+            }
+            return;
+          }
+
+          if (envelope.kind === 'event' && typeof envelope.name === 'string') {
+            handleSwiftEvent(envelope.name, envelope.payload);
+          }
+        } catch (error) {
+          console.warn('Failed to parse Swift Agent WS message', error);
+        }
+      };
+
+      ws.onerror = () => {
+        if (settled) return;
+        settled = true;
+        swiftWsConnectingRef.current = null;
+        reject(new Error('Swift Agent へのWebSocket接続に失敗しました。'));
+      };
+
+      ws.onclose = () => {
+        swiftWsRef.current = null;
+        swiftWsConnectingRef.current = null;
+        rejectAllSwiftPendingCommands('Swift Agent との接続が切断されました。');
+        if (!settled) {
+          settled = true;
+          reject(new Error('Swift Agent との接続が閉じられました。'));
+          return;
+        }
+        if (captureTransportRef.current === 'swift_ws') {
+          listeningRef.current = false;
+          setIsListening(false);
+        }
+      };
+    });
+
+    swiftWsConnectingRef.current = connectPromise;
+    return connectPromise;
+  }, [handleSwiftEvent, rejectAllSwiftPendingCommands]);
+
+  const closeSwiftWs = useCallback(() => {
+    rejectAllSwiftPendingCommands('Swift Agent との接続を終了しました。');
+    const ws = swiftWsRef.current;
+    swiftWsRef.current = null;
+    swiftWsConnectingRef.current = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'client_cleanup');
+    }
+  }, [rejectAllSwiftPendingCommands]);
+
+  const sendSwiftCommand = useCallback(async (
+    name: string,
+    payload: Record<string, unknown>,
+  ): Promise<SwiftResponsePayload> => {
+    const ws = await ensureSwiftWsConnected();
+    const requestId = createRequestId();
+    const envelope = makeSwiftEnvelope('command', name, payload, requestId);
+
+    return new Promise<SwiftResponsePayload>((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        swiftWsPendingCommandsRef.current.delete(requestId);
+        reject(new Error(`Swift Agent command timeout: ${name}`));
+      }, SWIFT_WS_COMMAND_TIMEOUT_MS);
+
+      swiftWsPendingCommandsRef.current.set(requestId, { resolve, reject, timeoutId });
+
+      try {
+        ws.send(JSON.stringify(envelope));
+      } catch (error) {
+        window.clearTimeout(timeoutId);
+        swiftWsPendingCommandsRef.current.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }, [ensureSwiftWsConnected, makeSwiftEnvelope]);
 
   const validateCapturePermission = useCallback(async (
     source: CaptureInputSource,
@@ -243,6 +562,7 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   }, [applyPipelineTranscript, notifyPipelineError, resetPipelineSession]);
 
   const enqueuePipelineChunk = useCallback((chunk: DesktopAudioChunk, options: PipelineSendOptions = {}) => {
+    if (captureTransportRef.current !== 'post') return;
     if (!backendBaseUrlRef.current) return;
     pipelineQueueRef.current = pipelineQueueRef.current
       .then(() => sendPipelineChunk(chunk, options))
@@ -253,6 +573,7 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   }, [notifyPipelineError, sendPipelineChunk]);
 
   const flushPipelineFinalChunk = useCallback(async () => {
+    if (captureTransportRef.current !== 'post') return;
     if (!backendBaseUrlRef.current) return;
 
     const finalText = browserTranscriptRef.current.trim();
@@ -320,7 +641,30 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
       void refreshDesktopAudioSources();
     }
 
+    if (captureTransportRef.current === 'swift_ws') {
+      void ensureSwiftWsConnected()
+        .then(async () => {
+          try {
+            await sendSwiftCommand('hello', {
+              client: 'electron',
+              protocol_version: '1.0.0',
+            });
+          } catch (error) {
+            console.warn('Swift hello command failed', error);
+          }
+          try {
+            await sendSwiftCommand('get_status', {});
+          } catch (error) {
+            console.warn('Swift get_status command failed', error);
+          }
+        })
+        .catch((error) => {
+          setError(error instanceof Error ? error.message : String(error));
+        });
+    }
+
     const offChunk = window.desktopAPI?.onAudioChunk((chunk) => {
+      if (captureTransportRef.current !== 'post') return;
       setDesktopChunkCount((current) => current + 1);
       enqueuePipelineChunk(chunk, {
         isFinalChunk: false,
@@ -392,9 +736,17 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
       offChunk?.();
       offCaptureError?.();
       stopBrowserRecognition();
+      closeSwiftWs();
       void window.desktopAPI?.stopAudioCapture?.();
     };
-  }, [enqueuePipelineChunk, refreshDesktopAudioSources, stopBrowserRecognition]);
+  }, [
+    closeSwiftWs,
+    enqueuePipelineChunk,
+    ensureSwiftWsConnected,
+    refreshDesktopAudioSources,
+    sendSwiftCommand,
+    stopBrowserRecognition,
+  ]);
 
   const startListeningForSource = useCallback(async (
     source: CaptureInputSource,
@@ -409,8 +761,53 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     setError(null);
     setDesktopChunkCount(0);
     resetPipelineSession();
+    resetSwiftTranscriptSession();
 
     try {
+      if (captureTransportRef.current === 'swift_ws') {
+        let swiftSourceId: string | undefined;
+        if (source === 'system_audio') {
+          if (!isDesktopCaptureAvailable || !window.desktopAPI?.getAudioSources) {
+            return { ok: false, mode: 'none', message: 'システム音声キャプチャはDesktop実行時のみ利用できます。' };
+          }
+
+          let sourceId = selectedDesktopSourceId;
+          if (!sourceId) {
+            const sources = await window.desktopAPI.getAudioSources();
+            setDesktopAudioSources(sources);
+            if (sources.length === 0) {
+              return { ok: false, mode: 'none', message: 'システム音声の取得対象が見つかりません。' };
+            }
+            sourceId = sources[0].id;
+            setSelectedDesktopSourceId(sourceId);
+          }
+          swiftSourceId = sourceId;
+        }
+
+        const swiftSessionId = pipelineSessionIdRef.current || createPipelineSessionId();
+        pipelineSessionIdRef.current = swiftSessionId;
+
+        await sendSwiftCommand('start_capture', {
+          session_id: swiftSessionId,
+          sources: [source],
+          source_id: swiftSourceId,
+          language: 'ja-JP',
+          emit_partials: true,
+          analyze_on_final: true,
+          include_dictionary: true,
+        });
+
+        listeningRef.current = true;
+        setIsListening(true);
+        browserTranscriptRef.current = '';
+        setTranscript('');
+        return {
+          ok: true,
+          mode: 'desktop',
+          message: 'Swift Agent 経由で音声認識を開始しました。',
+        };
+      }
+
       const permissionError = await validateCapturePermission(source);
       if (permissionError) {
         return { ok: false, mode: 'none', message: permissionError };
@@ -488,7 +885,9 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   }, [
     isDesktopCaptureAvailable,
     resetPipelineSession,
+    resetSwiftTranscriptSession,
     selectedDesktopSourceId,
+    sendSwiftCommand,
     startBrowserRecognition,
     validateCapturePermission,
   ]);
@@ -501,11 +900,19 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     listeningRef.current = false;
     setIsListening(false);
     stopBrowserRecognition();
+    if (captureTransportRef.current === 'swift_ws') {
+      try {
+        await sendSwiftCommand('stop_capture', { reason: 'user_requested' });
+      } catch (error) {
+        console.warn('Swift stop_capture command failed', error);
+      }
+      return;
+    }
     if (window.desktopAPI?.stopAudioCapture) {
       await window.desktopAPI.stopAudioCapture();
     }
     await flushPipelineFinalChunk();
-  }, [flushPipelineFinalChunk, stopBrowserRecognition]);
+  }, [flushPipelineFinalChunk, sendSwiftCommand, stopBrowserRecognition]);
 
   useEffect(() => {
     if (!window.desktopAPI?.onTrayCommand) return;
@@ -552,8 +959,9 @@ export const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   const resetTranscript = useCallback(() => {
     browserTranscriptRef.current = '';
     resetPipelineSession();
+    resetSwiftTranscriptSession();
     setTranscript('');
-  }, [resetPipelineSession]);
+  }, [resetPipelineSession, resetSwiftTranscriptSession]);
 
   return {
     transcript,

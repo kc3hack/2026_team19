@@ -27,6 +27,7 @@ export default defineConfig(async ({ mode }) => {
   }
 
   return {
+    base: './',
     plugins,
     resolve: {
       alias: {

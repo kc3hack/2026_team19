@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useSpeechRecognition } from './hooks/useSpeechRecognition';
+import { useSpeechRecognition, type SwiftDictionaryEntry } from './hooks/useSpeechRecognition';
 import { useDemoStream } from './hooks/useDemoStream';
 import { useVectorSend } from '@/app/hooks/useVectorSend';
 import { useReferDict, type DictTermResult } from '@/app/hooks/useReferDict';
@@ -42,6 +42,40 @@ const PRESETS = [
 ] as const;
 
 const App: React.FC = () => {
+  const appendApiDictionaryEntries = useCallback((entries: SwiftDictionaryEntry[]) => {
+    const newTerms: Term[] = [];
+    const newVectors: Record<string, number[]> = {};
+
+    for (const entry of entries) {
+      const termId = `api-${entry.term}-${entry.source}`;
+      newTerms.push({
+        id: termId,
+        word: entry.term,
+        kana: '',
+        shortDesc: entry.description.split(/(?<=[。．.!?！？\n])/)[0]?.trim() || entry.description,
+        longDesc: entry.description,
+        category: 'General',
+        level: 1,
+        relatedTerms: [],
+      });
+
+      if (entry.meaning_vector && entry.meaning_vector.length > 0) {
+        newVectors[termId] = entry.meaning_vector;
+      }
+    }
+
+    if (newTerms.length > 0) {
+      setApiTerms((prev) => {
+        const existingIds = new Set(prev.map((term) => term.id));
+        const deduped = newTerms.filter((term) => !existingIds.has(term.id));
+        return deduped.length > 0 ? [...prev, ...deduped] : prev;
+      });
+      if (Object.keys(newVectors).length > 0) {
+        setTermVectors((prev) => ({ ...prev, ...newVectors }));
+      }
+    }
+  }, []);
+
   if (import.meta.env.DEV) console.log('[TalkScope] App.tsx 読み込み（主題入力あり）');
   const {
     transcript,
@@ -58,7 +92,9 @@ const App: React.FC = () => {
     setSelectedDesktopSourceId,
     refreshDesktopAudioSources,
     desktopChunkCount,
-  } = useSpeechRecognition();
+  } = useSpeechRecognition({
+    onDictionaryResults: appendApiDictionaryEntries,
+  });
 
   const [activeTerms, setActiveTerms] = useState<Term[]>([]);
   const [selectedTerm, setSelectedTerm] = useState<Term | null>(null);
@@ -138,19 +174,13 @@ const App: React.FC = () => {
 
   // ── refer_dictionary API（1文ずつ送信し用語・意味・ベクトルを取得） ──
   const handleDictResults = useCallback((results: DictTermResult[]) => {
-    const newTerms: Term[] = [];
-    const newVectors: Record<string, number[]> = {};
-    for (const r of results) {
-      newTerms.push(r.term);
-      if (r.meaningVector && r.meaningVector.length > 0) {
-        newVectors[r.term.id] = r.meaningVector;
-      }
-    }
-    if (newTerms.length > 0) {
-      setApiTerms(prev => [...prev, ...newTerms]);
-      setTermVectors(prev => ({ ...prev, ...newVectors }));
-    }
-  }, []);
+    appendApiDictionaryEntries(results.map((result) => ({
+      term: result.term.word,
+      description: result.term.longDesc,
+      meaning_vector: result.meaningVector,
+      source: result.source,
+    })));
+  }, [appendApiDictionaryEntries]);
 
   useReferDict(transcript, {
     baseUrl: (import.meta.env.VITE_BACKEND_URL ?? '').trim(),

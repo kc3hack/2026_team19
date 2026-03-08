@@ -2,10 +2,51 @@ from __future__ import annotations
 
 import fastapi
 
-from app.schemas.pipeline import PipelineTranscribeAnalyzeResponse
+from app.schemas.pipeline import (
+    PipelineAnalyzeTextRequest,
+    PipelineAnalyzeTextResponse,
+    PipelineTranscribeAnalyzeResponse,
+)
+from app.services.speech_pipeline import analyze_text as analyze_text_payload
 from app.services.speech_pipeline import transcribe_and_analyze_chunk
 
 router = fastapi.APIRouter()
+
+
+@router.post(
+    "/analyze-text",
+    response_model=PipelineAnalyzeTextResponse,
+    summary="文字起こし済みテキストを解析する",
+    description=(
+        "Swift Agent が生成した発話テキストを受け取り、"
+        "確定発話に対して内容語ベクトル化・文ベクトル化・辞書参照を実行します。"
+    ),
+    responses={
+        200: {"description": "処理成功"},
+        422: {"description": "入力バリデーションエラー"},
+    },
+)
+async def analyze_text(
+    body: PipelineAnalyzeTextRequest,
+) -> PipelineAnalyzeTextResponse:
+    result = await analyze_text_payload(
+        session_id=body.session_id,
+        source=body.source,
+        utterance_id=body.utterance_id,
+        seq=body.seq,
+        text=body.text,
+        is_final=body.is_final,
+        confidence=body.confidence,
+        language=body.language,
+        start_ms=body.start_ms,
+        end_ms=body.end_ms,
+        include_dictionary=body.include_dictionary,
+        dictionary_top_k=body.dictionary_top_k,
+        deduplicate=body.deduplicate,
+        min_length=body.min_length,
+        normalize_sentence_vector=body.normalize_sentence_vector,
+    )
+    return PipelineAnalyzeTextResponse(**result)
 
 
 @router.post(

@@ -243,3 +243,67 @@ async def transcribe_and_analyze_chunk(
             "entries": dictionary_entries,
         },
     }
+
+
+async def analyze_text(
+    *,
+    session_id: str,
+    source: str,
+    utterance_id: str,
+    seq: int,
+    text: str,
+    is_final: bool,
+    confidence: float | None,
+    language: str,
+    start_ms: int,
+    end_ms: int,
+    include_dictionary: bool,
+    dictionary_top_k: int,
+    deduplicate: bool,
+    min_length: int,
+    normalize_sentence_vector: bool,
+) -> dict:
+    start = time.perf_counter()
+
+    normalized_text = text.strip()
+    vectorize_result = None
+    sentence_result = None
+    dictionary_entries = []
+
+    if is_final and normalized_text:
+        vectorize_result, sentence_result = await asyncio.to_thread(
+            _analyze_final_text,
+            text=normalized_text,
+            deduplicate=deduplicate,
+            min_length=min_length,
+            normalize_sentence_vector=normalize_sentence_vector,
+        )
+
+        if include_dictionary:
+            raw_entries = await refer_dictionary(normalized_text)
+            limit = max(1, min(dictionary_top_k, 50))
+            dictionary_entries = raw_entries[:limit]
+
+    processed_ms = int((time.perf_counter() - start) * 1000)
+
+    return {
+        "session_id": session_id,
+        "source": source,
+        "utterance_id": utterance_id,
+        "seq": seq,
+        "text": text,
+        "is_final": is_final,
+        "confidence": confidence,
+        "language": language,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "timing": {"processed_ms": max(processed_ms, 0)},
+        "analysis": {
+            "vectorize": vectorize_result,
+            "sentence_vectorize": sentence_result,
+        },
+        "dictionary": {
+            "enabled": bool(include_dictionary and is_final and normalized_text),
+            "entries": dictionary_entries,
+        },
+    }
